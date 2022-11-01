@@ -1,0 +1,168 @@
+1) Распаковать архив:
+tar -xf artists.csv.zip artists.csv
+
+2) Загрузка данных:
+docker cp artists.csv hw2-hive-server-1:/
+
+3) Подключиться в hive через beeline:
+docker exec -it hw2-hive-server-1 bash
+/opt/hive/bin/beeline -u jdbc:hive2://localhost:10000
+
+4) Создать таблицу и залить данные:
+CREATE TABLE `artists`(`mbid` string, `artist_mb` string, `artist_lastfm` string, `country_mb` string, `country_lastfm` string, `tags_mb` string, `tags_lastfm` string, `listeners_lastfm` int, `scrobbles_lastfm` int, `ambiguous_artist` boolean) row format delimited fields terminated by ',';
+
+LOAD DATA LOCAL INPATH '/artists.csv' OVERWRITE INTO TABLE artists;
+
+Используя Hive найти:
+a)Исполнителя с максимальным числом скробблов (из-за дублей имён берём максимум) - 5 баллов
+select artist_lastfm, max(scrobbles_lastfm) max_scrobbles from artists group by artist_lastfm order by max_scrobbles desc limit 1;
+
++----------------+----------------+
+| artist_lastfm  | max_scrobbles  |
++----------------+----------------+
+| The Beatles    | 517126254      |
++----------------+----------------+
+
+
+b)Самый популярный тэг на ластфм (популярность определил по числу слушателей)- 10 баллов
+select trim(itemsName) as tag_lastfm, sum(listeners_lastfm) as listeners from artists LATERAL VIEW explode(split(tags_lastfm, ';')) itemTable AS itemsName group by trim(itemsName) order by listeners desc limit 1;
+
++-------------+-------------+
+| tag_lastfm  |  listeners  |
++-------------+-------------+
+| seen live   | 4044219983  |
++-------------+-------------+
+
+
+c)Самые популярные исполнители 10 самых популярных тегов ластфм - 10 баллов (Как я понял нужен некоторый топ исполнителей по каждому из топа тэгов, сделал топ10 исполнителей для топ10 тэгов)
+with t1 as (select trim(itemsName) as tag_lastfm, sum(listeners_lastfm) as listeners from artists LATERAL VIEW explode(split(tags_lastfm, ';')) itemTable AS itemsName group by trim(itemsName) order by listeners desc limit 10),
+t2 as (select trim(itemsName) as tag_lastfm, listeners_lastfm as listeners, artist_lastfm from artists LATERAL VIEW explode(split(tags_lastfm, ';')) itemTable AS itemsName),
+t3 as (select tag_lastfm, artist_lastfm, listeners, row_number() over(partition by tag_lastfm order by listeners desc) as rn from t2 where tag_lastfm in (select tag_lastfm from t1))
+select * from t3 where rn <= 10;
+
++-----------------+------------------------+---------------+--------+
+|  t3.tag_lastfm  |    t3.artist_lastfm    | t3.listeners  | t3.rn  |
++-----------------+------------------------+---------------+--------+
+| 00s             | Coldplay               | 5381567       | 1      |
+| 00s             | Radiohead              | 4732528       | 2      |
+| 00s             | Red Hot Chili Peppers  | 4620835       | 3      |
+| 00s             | Rihanna                | 4558193       | 4      |
+| 00s             | Eminem                 | 4517997       | 5      |
+| 00s             | Kanye West             | 4390502       | 6      |
+| 00s             | Muse                   | 4089612       | 7      |
+| 00s             | Foo Fighters           | 4005236       | 8      |
+| 00s             | Linkin Park            | 3978390       | 9      |
+| 00s             | Lady Gaga              | 3820581       | 10     |
+| USA             | Red Hot Chili Peppers  | 4620835       | 1      |
+| USA             | Rihanna                | 4558193       | 2      |
+| USA             | Eminem                 | 4517997       | 3      |
+| USA             | Kanye West             | 4390502       | 4      |
+| USA             | Nirvana                | 4272894       | 5      |
+| USA             | Foo Fighters           | 4005236       | 6      |
+| USA             | Linkin Park            | 3978390       | 7      |
+| USA             | Lady Gaga              | 3820581       | 8      |
+| USA             | Green Day              | 3738772       | 9      |
+| USA             | Katy Perry             | 3733134       | 10     |
+| alternative     | Coldplay               | 5381567       | 1      |
+| alternative     | Radiohead              | 4732528       | 2      |
+| alternative     | Red Hot Chili Peppers  | 4620835       | 3      |
+| alternative     | Rihanna                | 4558193       | 4      |
+| alternative     | Eminem                 | 4517997       | 5      |
+| alternative     | The Killers            | 4428868       | 6      |
+| alternative     | Kanye West             | 4390502       | 7      |
+| alternative     | Nirvana                | 4272894       | 8      |
+| alternative     | Muse                   | 4089612       | 9      |
+| alternative     | Queen                  | 4023379       | 10     |
+| american        | Red Hot Chili Peppers  | 4620835       | 1      |
+| american        | Rihanna                | 4558193       | 2      |
+| american        | Eminem                 | 4517997       | 3      |
+| american        | Kanye West             | 4390502       | 4      |
+| american        | Nirvana                | 4272894       | 5      |
+| american        | Foo Fighters           | 4005236       | 6      |
+| american        | Linkin Park            | 3978390       | 7      |
+| american        | Lady Gaga              | 3820581       | 8      |
+| american        | Green Day              | 3738772       | 9      |
+| american        | Katy Perry             | 3733134       | 10     |
+| electronic      | Coldplay               | 5381567       | 1      |
+| electronic      | Radiohead              | 4732528       | 2      |
+| electronic      | Rihanna                | 4558193       | 3      |
+| electronic      | Kanye West             | 4390502       | 4      |
+| electronic      | Muse                   | 4089612       | 5      |
+| electronic      | Linkin Park            | 3978390       | 6      |
+| electronic      | Lady Gaga              | 3820581       | 7      |
+| electronic      | Daft Punk              | 3782404       | 8      |
+| electronic      | Katy Perry             | 3733134       | 9      |
+| electronic      | Gorillaz               | 3577998       | 10     |
+| indie           | Coldplay               | 5381567       | 1      |
+| indie           | Radiohead              | 4732528       | 2      |
+| indie           | Red Hot Chili Peppers  | 4620835       | 3      |
+| indie           | The Killers            | 4428868       | 4      |
+| indie           | Kanye West             | 4390502       | 5      |
+| indie           | Nirvana                | 4272894       | 6      |
+| indie           | Muse                   | 4089612       | 7      |
+| indie           | Foo Fighters           | 4005236       | 8      |
+| indie           | Linkin Park            | 3978390       | 9      |
+| indie           | Daft Punk              | 3782404       | 10     |
+| male vocalists  | Coldplay               | 5381567       | 1      |
+| male vocalists  | Radiohead              | 4732528       | 2      |
+| male vocalists  | Red Hot Chili Peppers  | 4620835       | 3      |
+| male vocalists  | Eminem                 | 4517997       | 4      |
+| male vocalists  | Kanye West             | 4390502       | 5      |
+| male vocalists  | Nirvana                | 4272894       | 6      |
+| male vocalists  | Muse                   | 4089612       | 7      |
+| male vocalists  | Queen                  | 4023379       | 8      |
+| male vocalists  | Foo Fighters           | 4005236       | 9      |
+| male vocalists  | Linkin Park            | 3978390       | 10     |
+| pop             | Coldplay               | 5381567       | 1      |
+| pop             | Radiohead              | 4732528       | 2      |
+| pop             | Red Hot Chili Peppers  | 4620835       | 3      |
+| pop             | Rihanna                | 4558193       | 4      |
+| pop             | Eminem                 | 4517997       | 5      |
+| pop             | Kanye West             | 4390502       | 6      |
+| pop             | Muse                   | 4089612       | 7      |
+| pop             | Queen                  | 4023379       | 8      |
+| pop             | Foo Fighters           | 4005236       | 9      |
+| pop             | Linkin Park            | 3978390       | 10     |
+| rock            | Coldplay               | 5381567       | 1      |
+| rock            | Radiohead              | 4732528       | 2      |
+| rock            | Red Hot Chili Peppers  | 4620835       | 3      |
+| rock            | Rihanna                | 4558193       | 4      |
+| rock            | Eminem                 | 4517997       | 5      |
+| rock            | The Killers            | 4428868       | 6      |
+| rock            | Kanye West             | 4390502       | 7      |
+| rock            | Nirvana                | 4272894       | 8      |
+| rock            | Muse                   | 4089612       | 9      |
+| rock            | Queen                  | 4023379       | 10     |
+| seen live       | Coldplay               | 5381567       | 1      |
+| seen live       | Radiohead              | 4732528       | 2      |
+| seen live       | Red Hot Chili Peppers  | 4620835       | 3      |
+| seen live       | Rihanna                | 4558193       | 4      |
+| seen live       | Eminem                 | 4517997       | 5      |
+| seen live       | Kanye West             | 4390502       | 6      |
+| seen live       | Muse                   | 4089612       | 7      |
+| seen live       | Queen                  | 4023379       | 8      |
+| seen live       | Foo Fighters           | 4005236       | 9      |
+| seen live       | Linkin Park            | 3978390       | 10     |
++-----------------+------------------------+---------------+--------+
+
+
+
+d)Любой другой инсайт на ваше усмотрение - 10 баллов
+Тут я вывел подсчёт дублей названия исполнителей на ласт_фм и вывел топ, всё-равно я писал этот запрос для исследования данных:
+
+select artist_lastfm, count(*) as doubles_cnt from artists group by artist_lastfm order by doubles_cnt DESC limit 10;
+
++----------------+--------------+
+| artist_lastfm  | doubles_cnt  |
++----------------+--------------+
+|                | 478127       |
+|  Jr."          | 605          |
+|  Sr."          | 65           |
+|  Inc."         | 61           |
+|  The"          | 37           |
+|  Jr"           | 30           |
+| Karma          | 26           |
+| "              | 26           |
+| Trinity        | 24           |
+| Angel          | 23           |
++----------------+--------------+
